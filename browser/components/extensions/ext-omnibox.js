@@ -8,6 +8,20 @@
 XPCOMUtils.defineLazyModuleGetter(this, "ExtensionSearchHandler",
                                   "resource://gre/modules/ExtensionSearchHandler.jsm");
 
+XPCOMUtils.defineLazyModuleGetter(this, "OmniboxSearch",
+                                  "resource://gre/modules/OmniboxSearch.jsm");
+
+// TODO: remove me
+XPCOMUtils.defineLazyModuleGetter(this, "Services",
+                                  "resource://gre/modules/Services.jsm");
+
+// A queue of extensions in line to override the omnibox dropdown (sorted oldest to newest).
+let dropdownOverrides = [];
+
+function log(s){
+  Services.console.logStringMessage("OmniboxExperiment: " + s);
+}
+
 this.omnibox = class extends ExtensionAPI {
   onManifestEntry(entryName) {
     let {extension} = this;
@@ -21,10 +35,40 @@ this.omnibox = class extends ExtensionAPI {
     } catch (e) {
       extension.manifestError(e.message);
     }
+
+    if (manifest.omnibox.dropdown_override) {
+      let dropdown = manifest.omnibox.dropdown_override;
+      let url = extension.baseURI.resolve(dropdown);
+
+      // first come, first serve
+      if (dropdownOverrides.length === 0) {
+        log('register ' + url + ' for ' + extension.id);
+        OmniboxSearch.register(url);
+      }
+
+      dropdownOverrides.push({id: extension.id, url});
+    }
   }
 
   onShutdown(reason) {
+    let {extension} = this;
+
     ExtensionSearchHandler.unregisterKeyword(this.keyword);
+
+    let i = dropdownOverrides.findIndex(o => o.id === extension.id);
+    if (i !== -1) {
+      dropdownOverrides.splice(i, 1);
+
+      if (dropdownOverrides.length !== 0) {
+        // set the next in line
+        log('set next ' + dropdownOverrides[0].url);
+        OmniboxSearch.register(dropdownOverrides[0].url);
+      } else {
+        // reset to regular dropdown
+        log('reset');
+        OmniboxSearch.reset();
+      }
+    }
   }
 
   getAPI(context) {

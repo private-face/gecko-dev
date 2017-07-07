@@ -29,5 +29,9 @@ EXTRA_JS_MODULES += [
     'SearchStaticData.jsm',
 ]
 
+EXTRA_JS_MODULES += [
+    'OmniboxSearch.jsm',
+]
+
 with Files('**'):
     BUG_COMPONENT = ('Firefox', 'Search')

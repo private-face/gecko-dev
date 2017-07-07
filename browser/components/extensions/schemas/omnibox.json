@@ -15,6 +15,11 @@
               "keyword": {
                 "type": "string",
                 "pattern": "^[^?\\s:]([^\\s:]*[^/\\s:])?$"
+              },
+              "dropdown_override": {
+                "type": "string",
+                "format": "relativeUrl",
+                "optional": true
               }
             },
             "optional": true
