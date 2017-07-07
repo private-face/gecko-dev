@@ -212,7 +212,7 @@ this.Panel.prototype = {
     });
   },
 
-  // This is called by tRESULT_NOMATCH_ONGOINGhe popup directly.  It overrides the popup's own
+  // This is called by the popup directly.  It overrides the popup's own
   // _invalidate method.
   _invalidate() {
     let controller = this.p.mInput.controller;
@@ -222,37 +222,32 @@ this.Panel.prototype = {
       this._emit("reset");
       this._currentUrlbarValue = controller.searchString;
     }
-    if (this._appendResultTimeout) {
-      this.window.clearTimeout(this._appendResultTimeout);
-    }
     this._appendCurrentResult();
   },
 
   // This emulates the popup's own _appendCurrentResult method, except instead
   // of appending results to the popup, it emits "result" events to the iframe.
   _appendCurrentResult() {
-    let controller = this.p.mInput.controller;
+    const controller = this.p.mInput.controller;
+    const maxResults = Math.min(this.p.maxResults, this.p._matchCount);
 
-    while (this._currentIndex < this.p.maxResults &&
-           this._currentIndex < this.p._matchCount) {
-      let url = controller.getValueAt(this._currentIndex);
-      let action = this.urlbar._parseActionUrl(url);
-      this._emit("result", {
-        index: this._currentIndex,
+    const results = [];
+    for(let index = 0; index < maxResults; index++) {
+      let url = controller.getValueAt(index);
+      results.push({
         url: url,
-        action: action,
-        image: controller.getImageAt(this._currentIndex),
-        title: controller.getCommentAt(this._currentIndex),
-        type: controller.getStyleAt(this._currentIndex),
-        text: controller.searchString.replace(/^\s+/, "").replace(/\s+$/, ""),
-      });
-      this._currentIndex++;
-    }
-    if (this._currentIndex < this.p.matchCount) {
-      this._appendResultTimeout = this.window.setTimeout(() => {
-        this._appendCurrentResult();
+        image: controller.getImageAt(index),
+        title: controller.getCommentAt(index),
+        type: controller.getStyleAt(index),
+        action: this.urlbar._parseActionUrl(url)
       });
     }
+
+    this._emit("results", {
+      results,
+      searchStatus: controller.searchStatus,
+      query: controller.searchString.trim()
+    });
   },
 
   get height() {

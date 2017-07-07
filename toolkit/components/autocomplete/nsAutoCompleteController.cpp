@@ -1683,6 +1683,14 @@ nsAutoCompleteController::ProcessResult(int32_t aSearchIndex, nsIAutoCompleteRes
     }
   }
 
+  if (searchResult != nsIAutoCompleteResult::RESULT_SUCCESS_ONGOING &&
+    searchResult != nsIAutoCompleteResult::RESULT_NOMATCH_ONGOING) {
+    if (mRowCount)
+      mSearchStatus = nsIAutoCompleteController::STATUS_COMPLETE_MATCH;
+    else
+      mSearchStatus = nsIAutoCompleteController::STATUS_COMPLETE_NO_MATCH;
+  }
+
   // Try to autocomplete the default index for this search.
   // Do this before invalidating so the binding knows about it.
   CompleteDefaultIndex(aSearchIndex);
