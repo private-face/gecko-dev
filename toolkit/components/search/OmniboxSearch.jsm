@@ -7,7 +7,7 @@
 const Ci = Components.interfaces;
 const Cu = Components.utils;
 
-this.EXPORTED_SYMBOLS = [ "OmniboxSearch" ];
+this.EXPORTED_SYMBOLS = [ "OmniboxOverrideManager" ];
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
@@ -24,7 +24,7 @@ const { SingletonEventManager } = ExtensionCommon;
 const XUL_NS = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
 const DEFAULT_MAX_RESULTS = 20;
 
-class OmniboxSearchOverride extends EventEmitter {
+class OmniboxOverride extends EventEmitter {
   constructor(ominboxURL, windowTracker) {
     super();
     this._overridesMap = new Map();
@@ -45,8 +45,8 @@ class OmniboxSearchOverride extends EventEmitter {
   }
 
   destroy() {
-    for(let [window, browser] of this._overridesMap.entries()) {
-      browser.destroy();
+    for(let [window, omnibox] of this._overridesMap.entries()) {
+      omnibox.destroy();
     }
     this._overridesMap.clear();
     this._windowTracker.removeCloseListener(this.onWindowClosed);
@@ -54,21 +54,21 @@ class OmniboxSearchOverride extends EventEmitter {
   }
 
   _onWindowOpened(window) {
-    const browser = new Browser(window, this._omniboxURL, this);
-    if (browser.isOverrideAllowed) {
-      this._overridesMap.set(window, browser);
+    const omnibox = new CustomOmnibox(window, this._omniboxURL, this);
+    if (omnibox.isOverrideSuccessful) {
+      this._overridesMap.set(window, omnibox);
     }
   }
 
   _onWindowClosed(window) {
-    const browser = this._overridesMap.get(window);
-    if (browser) {
-      browser.destroy();
+    const omnibox = this._overridesMap.get(window);
+    if (omnibox) {
+      omnibox.destroy();
       this._overridesMap.delete(window);
     }
   }
 
-  _getBrowser(id, context) {
+  _getOmnibox(id, context) {
     let window = null;
     if (id === null) {
       if (context.viewType === "background") {
@@ -84,11 +84,11 @@ class OmniboxSearchOverride extends EventEmitter {
     if (!window) {
       return Promise.reject({ message: `Invalid window ID: ${id}` });
     }
-    const browser = this._overridesMap.get(window);
-    if (!browser) {
+    const omnibox = this._overridesMap.get(window);
+    if (!omnibox) {
       return Promise.reject({ message: "No omnibox override exists for this window." });
     }
-    return Promise.resolve(browser);
+    return Promise.resolve(omnibox);
   }
 
   _generateEventManager(eventName, context) {
@@ -116,17 +116,17 @@ class OmniboxSearchOverride extends EventEmitter {
   getAPI(context) {
     return {
       get: (opt_windowId) => {
-        return this._getBrowser(opt_windowId, context)
-          .then((browser) => {
-            const details = browser.getOverrideDetails();
+        return this._getOmnibox(opt_windowId, context)
+          .then((omnibox) => {
+            const details = omnibox.getOverrideDetails();
             details.windowId = opt_windowId === null ? context.windowId : opt_windowId;
             return details;
           });
       },
 
       update: (opt_windowId, details) => {
-        return this._getBrowser(opt_windowId, context)
-          .then(browser => browser.updateOverrideDetails(details));
+        return this._getOmnibox(opt_windowId, context)
+          .then(omnibox => omnibox.updateOverrideDetails(details));
       },
 
       setMaxResults: (maxResults) => {
@@ -139,18 +139,18 @@ class OmniboxSearchOverride extends EventEmitter {
       },
 
       focus: (opt_windowId) => {
-        return this._getBrowser(opt_windowId, context)
-          .then(browser => browser.focus());
+        return this._getOmnibox(opt_windowId, context)
+          .then(omnibox => omnibox.focus());
       },
 
       blur: (opt_windowId) => {
-        return this._getBrowser(opt_windowId, context)
-          .then(browser => browser.blur());
+        return this._getOmnibox(opt_windowId, context)
+          .then(omnibox => omnibox.blur());
       },
 
       enter: (opt_windowId) => {
-        return this._getBrowser(opt_windowId, context)
-          .then(browser => browser.enter());
+        return this._getOmnibox(opt_windowId, context)
+          .then(omnibox => omnibox.enter());
       },
 
       onInput: this._generateEventManager("input", context),
@@ -163,63 +163,17 @@ class OmniboxSearchOverride extends EventEmitter {
   }
 }
 
-this.OmniboxSearch = {
-  _activeOverride: null,
-  _overridesQueue: [],
-
-  _activateNext() {
-    if (this._overridesQueue.length === 0) {
-      this._activeOverride = null;
-      return;
-    }
-
-    const {id, url, windowTracker} = this._overridesQueue.shift();
-    const override = new OmniboxSearchOverride(url, windowTracker);
-    this._activeOverride = { id, override };
-  },
-
-  get hasActiveOverride() {
-    return Boolean(this._activeOverride);
-  },
-
-  register(id, url, windowTracker) {
-    this._overridesQueue.push({
-      id, url, windowTracker
-    });
-    if (!this.hasActiveOverride) {
-      this._activateNext();
-    }
-  },
-
-  unregister(id) {
-    if (this._activeOverride && this._activeOverride.id === id) {
-      this._activeOverride.override.destroy();
-      this._activateNext();
-    } else {
-      const index = this._overridesQueue.findIndex(o => o.id === id);
-      if (index !== -1) {
-        this._overridesQueue.splice(index, 1);
-      }
-    }
-  },
-
-  getAPI(context) {
-    return this.hasActiveOverride ? 
-      this._activeOverride.override.getAPI(context) : {};
-  }
-};
-
-function Browser(win, omniboxURL, owner) {
+function CustomOmnibox(win, omniboxURL, owner) {
   this._window = win;
   this._tempPanel = this.document.getElementById("mainPopupSet");
   this._popup = this.document.getElementById("PopupAutoCompleteRichResult");
   this._urlbar = win.gURLBar;
 
-  this.isOverrideAllowed = this._popup.requestAutocompletePopupOverride(this, {
+  this.isOverrideSuccessful = this._popup.requestAutocompletePopupOverride(this, {
     _invalidate: this._invalidate.bind(this)
   });
 
-  if (this.isOverrideAllowed) {
+  if (this.isOverrideSuccessful) {
     this._owner = owner;
     this._browser = this._createBrowser(this._tempPanel, omniboxURL);
     this._urlbar.addEventListener("keydown", this);
@@ -230,13 +184,13 @@ function Browser(win, omniboxURL, owner) {
   }
 }
 
-Browser.prototype = {
+CustomOmnibox.prototype = {
   get document() {
     return this._window.document;
   },
 
   destroy() {
-    if (!this.isOverrideAllowed) {
+    if (!this.isOverrideSuccessful) {
       return;
     }
 
@@ -454,5 +408,52 @@ Browser.prototype = {
 
   set selectionEnd(val) {
     this._urlbar.selectionEnd = val;
+  }
+};
+
+
+this.OmniboxOverrideManager = {
+  _activeOverride: null,
+  _overridesQueue: [],
+
+  _activateNext() {
+    if (this._overridesQueue.length === 0) {
+      this._activeOverride = null;
+      return;
+    }
+
+    const {id, url, windowTracker} = this._overridesQueue.shift();
+    const override = new OmniboxOverride(url, windowTracker);
+    this._activeOverride = { id, override };
+  },
+
+  get hasActiveOverride() {
+    return Boolean(this._activeOverride);
+  },
+
+  register(id, url, windowTracker) {
+    this._overridesQueue.push({
+      id, url, windowTracker
+    });
+    if (!this.hasActiveOverride) {
+      this._activateNext();
+    }
+  },
+
+  unregister(id) {
+    if (this._activeOverride && this._activeOverride.id === id) {
+      this._activeOverride.override.destroy();
+      this._activateNext();
+    } else {
+      const index = this._overridesQueue.findIndex(o => o.id === id);
+      if (index !== -1) {
+        this._overridesQueue.splice(index, 1);
+      }
+    }
+  },
+
+  getAPI(context) {
+    return this.hasActiveOverride ? 
+      this._activeOverride.override.getAPI(context) : {};
   }
 };

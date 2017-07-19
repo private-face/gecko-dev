@@ -2143,35 +2143,36 @@ file, You can obtain one at http://mozilla.org/MPL/2.0/.
         ]]></body>
       </method>
 
-      <field name="_addonBrowserOwner">null</field>
-      <field name="_addonBrowserOverriddenFunctionsByName">{}</field>
+      <field name="_addonOwner">null</field>
+      <field name="_addonOverriddenFunctionsByName">{}</field>
 
       <!-- These methods must be overridden and properly handled by the API
            runtime so that it doesn't break the popup.  If any of these methods
-           is not overridden, then initAddonIframe should throw. -->
-      <field name="_addonBrowserOverrideFunctionNames">[
+           is not overridden, then requestAutocompletePopupOverride should throw. -->
+      <field name="_addonOverrideFunctionNames">[
         "_invalidate",
       ]</field>
 
-      <field name="_addonBrowserHiddenAnonids">[
+      <field name="_addonHiddenAnonids">[
         "search-suggestions-notification",
         "richlistbox",
+        "footer",
         "one-off-search-buttons",
       ]</field>
-      <field name="_addonBrowserHiddenDisplaysByAnonid">{}</field>
+      <field name="_addonHiddenDisplaysByAnonid">{}</field>
 
       <method name="requestAutocompletePopupOverride">
         <parameter name="owner"/>
         <parameter name="overrides"/>
         <body><![CDATA[
-          if (this._addonBrowserOwner) {
+          if (this._addonOwner) {
             // Another add-on has already requested the browser. Return null to
             // signal to the calling add-on that it should not take over the
             // popup.  First add-on wins for now.
             return false;
           }
           // Make sure all overrides are provided before doing anything.
-          for (let name of this._addonBrowserOverrideFunctionNames) {
+          for (let name of this._addonOverrideFunctionNames) {
             if (typeof(overrides[name]) != "function") {
               throw new Error(
                 "Override for method '" + name + "' must be given"
@@ -2180,21 +2181,21 @@ file, You can obtain one at http://mozilla.org/MPL/2.0/.
           }
 
           // hide elements from default popup
-          this._addonBrowserHiddenDisplaysByAnonid = {};
-          for (let anonid of this._addonBrowserHiddenAnonids) {
+          this._addonHiddenDisplaysByAnonid = {};
+          for (let anonid of this._addonHiddenAnonids) {
             let child = document.getAnonymousElementByAttribute(
               this, "anonid", anonid
             );
-            this._addonBrowserHiddenDisplaysByAnonid[anonid] =
+            this._addonHiddenDisplaysByAnonid[anonid] =
               child.style.display;
             child.style.display = "none";
           }
 
           // OK, override methods
-          this._addonBrowserOwner = owner;
-          this._addonBrowserOverriddenFunctionsByName = {};
-          for (let name of this._addonBrowserOverrideFunctionNames) {
-            this._addonBrowserOverriddenFunctionsByName[name] = this[name];
+          this._addonOwner = owner;
+          this._addonOverriddenFunctionsByName = {};
+          for (let name of this._addonOverrideFunctionNames) {
+            this._addonOverriddenFunctionsByName[name] = this[name];
             this[name] = overrides[name];
           }
           return true;
@@ -2204,21 +2205,21 @@ file, You can obtain one at http://mozilla.org/MPL/2.0/.
       <method name="releaseAutocompletePopupOverride">
         <parameter name="owner"/>
         <body><![CDATA[
-          if (this._addonBrowserOwner != owner) {
+          if (this._addonOwner != owner) {
             throw new Error("You're not the Browser owner");
           }
-          this._addonBrowserOwner = null;
-          for (let anonid of this._addonBrowserHiddenAnonids) {
+          this._addonOwner = null;
+          for (let anonid of this._addonHiddenAnonids) {
             let child = document.getAnonymousElementByAttribute(
               this, "anonid", anonid
             );
             child.style.display =
-              this._addonBrowserHiddenDisplaysByAnonid[anonid];
+              this._addonHiddenDisplaysByAnonid[anonid];
           }
-          for (let name in this._addonBrowserOverriddenFunctionsByName) {
-            this[name] = this._addonBrowserOverriddenFunctionsByName[name];
+          for (let name in this._addonOverriddenFunctionsByName) {
+            this[name] = this._addonOverriddenFunctionsByName[name];
           }
-          this._addonBrowserOverriddenFunctionsByName = {};
+          this._addonOverriddenFunctionsByName = {};
         ]]></body>
       </method>
 

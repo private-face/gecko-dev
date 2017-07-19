@@ -8,12 +8,8 @@
 XPCOMUtils.defineLazyModuleGetter(this, "ExtensionSearchHandler",
                                   "resource://gre/modules/ExtensionSearchHandler.jsm");
 
-XPCOMUtils.defineLazyModuleGetter(this, "OmniboxSearch",
+XPCOMUtils.defineLazyModuleGetter(this, "OmniboxOverrideManager",
                                   "resource://gre/modules/OmniboxSearch.jsm");
-
-// TODO: remove me
-XPCOMUtils.defineLazyModuleGetter(this, "Services",
-                                  "resource://gre/modules/Services.jsm");
 
 Components.utils.import("resource://gre/modules/Console.jsm");
 const console = new ConsoleAPI();
@@ -36,7 +32,7 @@ this.omnibox = class extends ExtensionAPI {
       let dropdown = manifest.omnibox.dropdown_override;
       let url = extension.baseURI.resolve(dropdown);
       // Should we throw in case of existing overrides?
-      OmniboxSearch.register(extension.id, url, windowTracker);
+      OmniboxOverrideManager.register(extension.id, url, windowTracker);
     }
   }
 
@@ -44,7 +40,7 @@ this.omnibox = class extends ExtensionAPI {
     let {extension} = this;
 
     ExtensionSearchHandler.unregisterKeyword(this.keyword);
-    OmniboxSearch.unregister(extension.id);
+    OmniboxOverrideManager.unregister(extension.id);
   }
 
   getAPI(context) {
@@ -113,7 +109,7 @@ this.omnibox = class extends ExtensionAPI {
       },
     };
     
-    Object.assign(OmniboxAPI.omnibox, OmniboxSearch.getAPI(context));
+    Object.assign(OmniboxAPI.omnibox, OmniboxOverrideManager.getAPI(context));
 
     return OmniboxAPI;
   }
