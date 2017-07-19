@@ -14,7 +14,8 @@
             "properties": {
               "keyword": {
                 "type": "string",
-                "pattern": "^[^?\\s:]([^\\s:]*[^/\\s:])?$"
+                "pattern": "^[^?\\s:]([^\\s:]*[^/\\s:])?$",
+                "optional": true
               },
               "dropdown_override": {
                 "type": "string",
@@ -131,8 +132,79 @@
             }
           }
         }
+      },
+      {
+        "id": "OmniboxOverride",
+        "type": "object",
+        "description": "An object containing details of overriden omnibox.",
+        "properties": {
+          "windowId": {
+            "type": "number",
+            "optional": true
+          },
+          "value": {
+            "type": "string",
+            "optional": true
+          },
+          "height": {
+            "type": "integer",
+            "optional": true
+          },
+          "selectionStart": {
+            "type": "integer",
+            "optional": true
+          },
+          "selectionEnd": {
+            "type": "integer",
+            "optional": true
+          }
+        }
+      },
+      {
+        "id": "UrlbarEventDetails",
+        "type": "object",
+        "description": "An object representing a urlbar event.",
+        "properties": {
+          "windowId": { "type": "integer" },
+          "altKey": { "type": "boolean" },
+          "ctrlKey": { "type": "boolean" },
+          "metaKey": { "type": "boolean" },
+          "shiftKey": { "type": "boolean" },
+          "code": { "type": "string" },
+          "key": { "type": "string" }
+        }
+      },
+      {
+        "id": "Result",
+        "type": "object",
+        "description": "An object representing a omnibox search suggestion.",
+        "properties": {
+          "url": { "type": "string" },
+          "image": { "type": "string" },
+          "title": { "type": "string" },
+          "type": { "type": "string" },
+          "action": { "type": "any" }
+        }
       }
     ],
+    "properties": {
+      "SEARCH_STATUS_NONE": {
+        "value": 1,
+        "description": "No autocomplete search is currently happening."
+      },
+      "SEARCH_STATUS_SEARCHING": {
+        "value": 2,
+        "description": "Autocomplete search is in progress."
+      },
+      "SEARCH_STATUS_COMPLETE_NO_MATCH": {
+        "value": 3,
+        "description": "Autocomplete search is finished, no results found."
+      },
+      "SEARCH_STATUS_COMPLETE_MATCH": {
+        "value": 4,
+        "description": "Autocomplete search is finished with at least one result."
+      }
+    },
     "functions": [
       {
         "name": "setDefaultSuggestion",
@@ -143,6 +215,152 @@
             "name": "suggestion",
             "$ref": "DefaultSuggestResult",
             "description": "A partial SuggestResult object, without the 'content' parameter."
+          }
+        ]
+      },
+      {
+        "name": "get",
+        "type": "function",
+        "description": "Get omnibox API for current window",
+        "async": "callback",
+        "parameters": [
+          {
+            "name": "windowId",
+            "type": "number",
+            "optional": true
+          },
+          {
+            "type": "function",
+            "name": "callback",
+            "parameters": [
+              {
+                "name": "omnibox",
+                "type": "object"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "update",
+        "type": "function",
+        "description": "Get omnibox API for current window",
+        "async": "callback",
+        "parameters": [
+          {
+            "name": "windowId",
+            "type": "number",
+            "optional": true
+          },
+          {
+            "name": "details",
+            "$ref": "OmniboxOverride"
+          },
+          {
+            "type": "function",
+            "name": "callback",
+            "parameters": [
+              {
+                "name": "omnibox",
+                "type": "object"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "focus",
+        "type": "function",
+        "description": "Focus an urlbar in given window.",
+        "async": "callback",
+        "parameters": [
+          {
+            "name": "windowId",
+            "type": "number",
+            "optional": true
+          },
+          {
+            "type": "function",
+            "name": "callback",
+            "parameters": [
+              {
+                "type": "any"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "blur",
+        "type": "function",
+        "description": "Remove focus from an urlbar in given window.",
+        "async": "callback",
+        "parameters": [
+          {
+            "name": "windowId",
+            "type": "number",
+            "optional": true
+          },
+          {
+            "type": "function",
+            "name": "callback",
+            "parameters": [
+              {
+                "type": "any"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "enter",
+        "type": "function",
+        "description": "Apply a default action to a current urlbar value in  given window.",
+        "async": "callback",
+        "parameters": [
+          {
+            "name": "windowId",
+            "type": "number",
+            "optional": true
+          },
+          {
+            "type": "function",
+            "name": "callback",
+            "parameters": [
+              {
+                "type": "any"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "getMaxResults",
+        "type": "function",
+        "description": "Gets the current number of maximum results in omnibox",
+        "async": "callback",
+        "parameters": [
+          {
+            "type": "function",
+            "name": "callback",
+            "parameters": [
+              {
+                "name": "result",
+                "type": "integer"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "setMaxResults",
+        "type": "function",
+        "description": "Sets the number of maximum results in omnibox",
+        "async": "callback",
+        "parameters": [
+          {
+            "name": "value",
+            "type": "integer"
           }
         ]
       }
@@ -200,6 +418,69 @@
         "type": "function",
         "description": "User has ended the keyword input session without accepting the input.",
         "parameters": []
+      },
+      {
+        "name": "onInput",
+        "type": "function",
+        "parameters": [
+          {
+            "$ref": "UrlbarEventDetails"
+          }
+        ]
+      },
+      {
+        "name": "onKeydown",
+        "type": "function",
+        "description": "User has pressed a key in urlbar.",
+        "parameters": [
+          {
+            "$ref": "UrlbarEventDetails"
+          }
+        ]
+      },
+      {
+        "name": "onFocus",
+        "type": "function",
+        "parameters": []
+      },
+      {
+        "name": "onBlur",
+        "type": "function",
+        "parameters": []
+      },
+      {
+        "name": "onReset",
+        "type": "function",
+        "parameters": [
+          {
+            "name": "details",
+            "type": "object",
+            "properties": {
+              "windowId": {
+                "type": "number"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "name": "onResults",
+        "type": "function",
+        "parameters": [
+          {
+            "name": "details",
+            "type": "object",
+            "properties": {
+              "windowId": { "type": "integer" },
+              "query": { "type": "string" },
+              "searchStatus": { "type": "number" },
+              "results": {
+                "type": "array",
+                "items": { "$ref": "Result" }
+              }
+            }
+          }
+        ]
       }
     ]
   },

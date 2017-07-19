@@ -4,7 +4,6 @@
 
 "use strict";
 
-const Cc = Components.classes;
 const Ci = Components.interfaces;
 const Cu = Components.utils;
 
@@ -12,34 +11,148 @@ this.EXPORTED_SYMBOLS = [ "OmniboxSearch" ];
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Services.jsm");
+Cu.import("resource://gre/modules/ExtensionUtils.jsm");
+Cu.import("resource://gre/modules/EventEmitter.jsm");
+Cu.import("resource://gre/modules/ExtensionCommon.jsm");
 
-function log(s){
-  Services.console.logStringMessage("OmniboxExperiment: " + s);
-}
+XPCOMUtils.defineLazyModuleGetter(this, "ExtensionParent",
+                                  "resource://gre/modules/ExtensionParent.jsm");
 
-this.OmniboxSearch = {
-  register(url){
-    log("ACPopup register " + url);
+const {
+  promiseEvent,
+} = ExtensionUtils;
 
+const { SingletonEventManager } = ExtensionCommon;
+
+const XUL_NS = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
+
+const BrowserWindows = new WeakMap();
+
+class OmniboxSearchOverride extends EventEmitter {
+  constructor() {
+    super();
+    this.maxResults = 20;
+  }
+
+  register(url, windowTracker) {
+    this.windowTracker = windowTracker;
     BrowserListener.init(url);
-  },
-  reset(){
-    log("ACPopup reset ");
+  }
 
+  reset() {
     BrowserListener.destroy();
+  }
+
+  _getBrowser(id, context) {
+    let window = null;
+    if (id === null) {
+      if (context.viewType === "background") {
+        // There is no 'default' omnibox for background page, 
+        // you have to specify windowId.
+        return Promise.reject({ message: "Missing window ID." });
+      } else {
+        window = context.currentWindow;
+      }
+    } else {
+      window = this.windowTracker.getWindow(id, context);
+    }
+    if (!window) {
+      return Promise.reject({ message: `Invalid window ID: ${id}` });
+    }
+    const browser = BrowserWindows.get(window);
+    if (!browser) {
+      return Promise.reject({ message: "No omnibox override exists for this window." });
+    }
+    return Promise.resolve(browser);
+  }
+
+  _generateEventManager(eventName, context) {
+    const name = eventName[0].toUpperCase() + eventName.slice(1);
+
+    return new SingletonEventManager(context, `omnibox.on${name}`, fire => {
+      const listener = (eventName, window, details) => {
+        const id = this.windowTracker.getId(window);
+        if (context.viewType === "background" || context.windowId === id) {
+          if (details) {
+            details.windowId = id;
+            fire.async(details);
+          } else {
+            fire.async();
+          }
+        }
+      };
+      this.on(eventName, listener);
+      return () => {
+        this.off(eventName, listener);
+      }
+    }).api();
+  }
+
+  getAPI(context) {
+    return {
+      get: (opt_windowId) => {
+        return this._getBrowser(opt_windowId, context)
+          .then((browser) => {
+            const details = browser.getOverrideDetails();
+            details.windowId = opt_windowId === null ? context.windowId : opt_windowId;
+            return details;
+          });
+      },
+
+      update: (opt_windowId, details) => {
+        return this._getBrowser(opt_windowId, context)
+          .then(browser => browser.updateOverrideDetails(details));
+      },
+
+      setMaxResults: (maxResults) => {
+        this.maxResults = maxResults;
+        return Promise.resolve(maxResults);
+      },
+
+      getMaxResults: () => {
+        return Promise.resolve(this.maxResults);
+      },
+
+      focus: (opt_windowId) => {
+        return this._getBrowser(opt_windowId, context)
+          .then(browser => browser.focus());
+      },
+
+      blur: (opt_windowId) => {
+        return this._getBrowser(opt_windowId, context)
+          .then(browser => browser.blur());
+      },
+
+      enter: (opt_windowId) => {
+        return this._getBrowser(opt_windowId, context)
+          .then(browser => browser.enter());
+      },
+
+      onInput: this._generateEventManager("input", context),
+      onKeydown: this._generateEventManager("keydown", context),
+      onFocus: this._generateEventManager("focus", context),
+      onBlur: this._generateEventManager("blur", context),
+      onReset: this._generateEventManager("reset", context),
+      onResults: this._generateEventManager("results", context),
+    };
   }
 }
 
-/* BrowserListener.jsm */
+const omniboxSearch = new OmniboxSearchOverride;
+
+this.OmniboxSearch = omniboxSearch;
 
 this.BrowserListener = {
-
-  init(iframeURL) {
+  init(omniboxURL) {
     if (this.browsers) {
       return;
     }
-    this.iframeURL = iframeURL;
+    this.omniboxURL = omniboxURL;
     this.browsers = new Set();
+    // TODO see if we could make use of windowTracker events here
+    // see:   windowTracker.addOpenListener(this._handleWindowOpen);
+    //        windowTracker.addCloseListener(this._handleWindowClose);
+    // instead of doing everything ourselves 
     this.registerOpenBrowserWindows();
     Services.ww.registerNotification(this);
   },
@@ -67,7 +180,7 @@ this.BrowserListener = {
   registerPossibleBrowserWindow(win) {
     promiseWindowLoaded(win).then(() => {
       if (isValidBrowserWindow(win)) {
-        this.browsers.add(new Browser(win, this.iframeURL));
+        this.browsers.add(new Browser(win, this.omniboxURL));
       }
     });
   },
@@ -88,29 +201,6 @@ this.BrowserListener = {
         }
       }
     }
-  },
-};
-
-function Browser(win, iframeURL) {
-  this.window = win;
-  this.iframeURL = iframeURL;
-  this._initPanel();
-}
-
-Browser.prototype = {
-  get document() {
-    return this.window.document;
-  },
-
-  destroy() {
-    if (this._panel) {
-      this._panel.destroy();
-    }
-  },
-
-  _initPanel() {
-    let elt = this.document.getElementById("PopupAutoCompleteRichResult");
-    this._panel = new Panel(elt, this.iframeURL);
   },
 };
 
@@ -136,80 +226,169 @@ function promiseWindowLoaded(win, callback) {
   });
 }
 
-/* Panel.jsm */
+function Browser(win, omniboxURL) {
+  if (BrowserWindows.has(win)) {
+    return BrowserWindows.get(win);
+  }
+  this.window = win;
+  this.tempPanel = this.document.getElementById("mainPopupSet");
+  this.p = this.document.getElementById("PopupAutoCompleteRichResult");
+  this._urlbar = win.gURLBar;
 
-this.Panel = function (panelElt, iframeURL) {
-  this.p = panelElt;
-  this.iframeURL = iframeURL;
-  this._initPanel();
-  this.urlbar.addEventListener("keydown", this);
-  this.urlbar.addEventListener("input", this);
-  this.urlbar.addEventListener("focus", this);
-  this.urlbar.addEventListener("blur", this);
-  this._emitQueue = [];
-};
+  this.isOverrideAllowed = this.p.requestAutocompletePopupOverride(this, {
+    _invalidate: this._invalidate.bind(this)
+  });
 
-this.Panel.prototype = {
+  if (this.isOverrideAllowed) {
+    this.browser = this._createBrowser(this.tempPanel, omniboxURL);
+    this._urlbar.addEventListener("keydown", this);
+    this._urlbar.addEventListener("input", this);
+    this._urlbar.addEventListener("focus", this);
+    this._urlbar.addEventListener("blur", this);  
+    this.p.addEventListener("popupshown", this);
+    BrowserWindows.set(this.window, this);
+  }
+}
 
+Browser.prototype = {
   get document() {
-    return this.p.ownerDocument;
-  },
-
-  get window() {
-    return this.document.defaultView;
-  },
-
-  get urlbar() {
-    return this.window.gURLBar;
-  },
-
-  iframe: null,
-
-  get iframeDocument() {
-    return this.iframe.contentDocument;
-  },
-
-  get iframeWindow() {
-    return this.iframe.contentWindow;
+    return this.window.document;
   },
 
   destroy() {
-    this.p.destroyAddonIframe(this);
-    this.urlbar.removeEventListener("keydown", this);
-    this.urlbar.removeEventListener("input", this);
-    this.urlbar.removeEventListener("focus", this);
-    this.urlbar.removeEventListener("focus", this);
-  },
-
-  _initPanel() {
-    this.iframe = this.p.initAddonIframe(this, {
-      _invalidate: this._invalidate.bind(this),
-    });
-    if (!this.iframe) {
-      // This will be the case when somebody else already owns the iframe.
-      // First consumer wins right now.
+    if (!this.isOverrideAllowed) {
       return;
     }
-    let onLoad = event => {
-      this.iframe.removeEventListener("load", onLoad, true);
-      this._initIframeContent(event.target.defaultView);
-    };
-    this.iframe.addEventListener("load", onLoad, true);
-    this.iframe.setAttribute("src", this.iframeURL);
+
+    this.p.releaseAutocompletePopupOverride(this);
+    this._destroyBrowser(this.browser);
+    this._urlbar.removeEventListener("keydown", this);
+    this._urlbar.removeEventListener("input", this);
+    this._urlbar.removeEventListener("focus", this);
+    this._urlbar.removeEventListener("blur", this);
+    this.p.removeEventListener("popupshown", this);
+    BrowserWindows.delete(this.window, this);
+    this.p.style.height = "";
   },
 
-  _initIframeContent(win) {
-    // Clone the urlbar API functions into the iframe window.
-    win = XPCNativeWrapper.unwrap(win);
-    let apiInstance = Cu.cloneInto(iframeAPIPrototype, win, {
-      cloneFunctions: true,
+  _createBrowser(viewNode, omniboxURL = null) {
+    const browser = this.document.createElementNS(XUL_NS, "browser");
+    browser.setAttribute("type", "content");
+    browser.setAttribute("disableglobalhistory", "true");
+    browser.setAttribute("transparent", "true");
+    browser.setAttribute("class", "webextension-omnibox-browser");
+    browser.setAttribute("webextension-view-type", "popup");
+    browser.setAttribute("tooltip", "aHTMLTooltip");
+    browser.setAttribute("contextmenu", "contentAreaContextMenu");
+    browser.setAttribute("autocompletepopup", "PopupAutoComplete");
+    browser.setAttribute("flex", "1");
+
+    const readyPromise = promiseEvent(browser, "load");
+    viewNode.appendChild(browser);
+
+    ExtensionParent.apiManager.emit("extension-browser-inserted", browser);
+
+    if (!omniboxURL) {
+      browser.messageManager.addMessageListener("Extension:BrowserResized", this);
+      return browser;
+    }
+
+    readyPromise.then(() => {
+      let mm = browser.messageManager;
+      mm.loadFrameScript("chrome://browser/content/content.js", true);
+      mm.loadFrameScript(
+        "chrome://extensions/content/ext-browser-content.js", false);
+      mm.sendAsyncMessage("Extension:InitBrowser", {
+        allowScriptsToClose: true,
+        blockParser: false,
+        fixedWidth: false,
+        maxWidth: Infinity,
+        maxHeight: Infinity,
+        stylesheets: [],
+        isInline: false
+      });
+      browser.loadURI(omniboxURL);
     });
-    XPCNativeWrapper.unwrap(apiInstance)._panel = this;
-    Object.defineProperty(win, "urlbar", {
-      get() {
-        return apiInstance;
-      },
-    });
+
+    return browser;
+  },
+
+  _destroyBrowser(browser) {
+    const mm = browser.messageManager;
+    if (mm) {
+      mm.removeMessageListener("Extension:BrowserResized", this);
+    }
+    browser.remove();
+  },
+
+  _attach() {
+    const browser = this.browser;
+    const viewNode = this.document.getAnonymousElementByAttribute(this.p, 
+      "anonid", "popupoverride");
+    this.browser = this._createBrowser(viewNode);
+    this.browser.swapDocShells(browser);
+    this._destroyBrowser(browser);
+  },
+
+  _getUrlbarEventDetails(event) {
+    let properties = [
+      "altKey",
+      "code",
+      "ctrlKey",
+      "key",
+      "metaKey",
+      "shiftKey",
+    ];
+    return properties.reduce((memo, prop) => {
+      memo[prop] = event[prop];
+      return memo;
+    }, {});
+  },
+
+  handleEvent(event) {
+    switch(event.type) {
+      case "popupshown":
+        this._attach();
+        this.p.removeEventListener("popupshown", this);
+        break;
+      case "focus":
+      case "blur":
+        omniboxSearch.emit(event.type, this.window);
+        break;
+      case "input":
+        omniboxSearch.emit(event.type, this.window, {
+          value: this.value
+        });
+        break;
+      case "keydown":
+        omniboxSearch.emit(event.type, this.window, 
+          this._getUrlbarEventDetails(event));  
+        break;
+    }
+  },
+
+  receiveMessage({name, data}) {
+    if (name === "Extension:BrowserResized") {
+      this.height = data.height;
+    }
+  },
+
+  getOverrideDetails() {
+    return {
+      height: this.height,
+      value: this.value,
+      selectionStart: this.selectionStart,
+      selectionEnd: this.selectionEnd,
+    };
+  },
+
+  updateOverrideDetails(details) {
+    const modifiableProps = ["value", "selectionStart", "selectionEnd", "height"];
+    for (let [prop, value] of Object.entries(details)) {
+      if (modifiableProps.indexOf(prop) !== -1) {
+        this[prop] = value;
+      }
+    }
   },
 
   // This is called by the popup directly.  It overrides the popup's own
@@ -219,203 +398,79 @@ this.Panel.prototype = {
 
     if(this._currentUrlbarValue !== controller.searchString){
       this._currentIndex = 0;
-      this._emit("reset");
+      omniboxSearch.emit("reset", this.window);
       this._currentUrlbarValue = controller.searchString;
     }
     this._appendCurrentResult();
   },
 
   // This emulates the popup's own _appendCurrentResult method, except instead
-  // of appending results to the popup, it emits "result" events to the iframe.
+  // of appending results to the popup, it emits "result" events.
   _appendCurrentResult() {
     const controller = this.p.mInput.controller;
-    const maxResults = Math.min(this.p.maxResults, this.p._matchCount);
+    const maxResults = Math.min(omniboxSearch.maxResults, this.p._matchCount);
 
     const results = [];
     for(let index = 0; index < maxResults; index++) {
-      let url = controller.getValueAt(index);
+      const url = controller.getValueAt(index);
       results.push({
         url: url,
         image: controller.getImageAt(index),
         title: controller.getCommentAt(index),
         type: controller.getStyleAt(index),
-        action: this.urlbar._parseActionUrl(url)
+        action: this._urlbar._parseActionUrl(url)
       });
     }
 
-    this._emit("results", {
+    omniboxSearch.emit("results", this.window, {
       results,
       searchStatus: controller.searchStatus,
       query: controller.searchString.trim()
     });
   },
 
-  get height() {
-    return this.iframe.getBoundingClientRect().height;
-  },
-
-  set height(val) {
-    this.p.removeAttribute("height");
-    this.iframe.style.height = val + "px";
-  },
-
-  handleEvent(event) {
-    let methName = "_on" + event.type[0].toUpperCase() + event.type.substr(1);
-    this[methName](event);
-  },
-
-  _onKeydown(event) {
-    let emittedEvent = this._emitUrlbarEvent(event);
-    if (emittedEvent && emittedEvent.defaultPrevented) {
-      event.preventDefault();
-      event.stopPropagation();
-    }
-  },
-
-  _onInput(event) {
-    this._emitUrlbarEvent(event);
-  },
-
-  _onFocus(event) {
-    this._emitUrlbarEvent(event);
-  },
-
-  _onBlur(event) {
-    this._emitUrlbarEvent(event);
-  },
-
-  _emitUrlbarEvent(event) {
-    let properties = [
-      "altKey",
-      "code",
-      "ctrlKey",
-      "key",
-      "metaKey",
-      "shiftKey",
-    ];
-    let detail = properties.reduce((memo, prop) => {
-      memo[prop] = event[prop];
-      return memo;
-    }, {});
-    return this._emit(event.type, detail);
-  },
-
-  _emit(eventName, detailObj=null) {
-    this._emitQueue.push({
-      name: "urlbar_" + eventName,
-      detail: detailObj,
-    });
-    return this._processEmitQueue();
-  },
-
-  _processEmitQueue() {
-    if (!this._emitQueue.length) {
-      return null;
-    }
-
-    // iframe.contentWindow can be undefined right after the iframe is created,
-    // even after a number of seconds have elapsed.  Don't know why.  But that's
-    // entirely the reason for having a queue instead of simply dispatching
-    // events as they're created, unfortunately.
-    if (!this.iframeWindow) {
-      if (!this._processEmitQueueTimer) {
-        this._processEmitQueueTimer =
-          Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
-        this._processEmitQueueTimer.init(() => {
-          this._processEmitQueue();
-        }, 100, Ci.nsITimer.TYPE_REPEATING_SLACK);
-      }
-      return null;
-    }
-
-    if (this._processEmitQueueTimer) {
-      this._processEmitQueueTimer.cancel();
-      delete this._processEmitQueueTimer;
-    }
-
-    let { name, detail } = this._emitQueue.shift();
-    let win = XPCNativeWrapper.unwrap(this.iframeWindow);
-    let event = new this.iframeWindow.CustomEvent(name, {
-      detail: Cu.cloneInto(detail, win),
-      cancelable: true,
-    });
-    this.iframeWindow.dispatchEvent(event);
-
-    // More events may be queued up, so recurse.  Do it after a turn of the
-    // event loop to avoid growing the stack as big as the queue, and to let the
-    // caller handle the returned event first.
-    let recurseTimer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
-    recurseTimer.init(() => {
-      this._processEmitQueue();
-    }, 100, Ci.nsITimer.TYPE_ONE_SHOT);
-
-    return event;
-  },
-};
-
-
-// This is the consumer API that's cloned into the iframe window.  Be careful of
-// defining static values on this, or even getters and setters (that aren't real
-// functions).  The cloning process means that such values are copied by value,
-// at the time of cloning, which is probably not what you want.  That's why some
-// of these are functions even though it'd be nicer if they were getters and
-// setters.
-let iframeAPIPrototype = {
-
-  getPanelHeight() {
-    return XPCNativeWrapper.unwrap(this)._panel.height;
-  },
-
-  setPanelHeight(val) {
-    XPCNativeWrapper.unwrap(this)._panel.height = val;
-  },
-
-  getValue() {
-    return XPCNativeWrapper.unwrap(this)._panel.urlbar.value;
-  },
-
-  setValue(val) {
-    XPCNativeWrapper.unwrap(this)._panel.urlbar.value = val;
-  },
-
-  getMaxResults() {
-    return XPCNativeWrapper.unwrap(this)._panel.p.maxResults;
-  },
-
-  setMaxResults(val) {
-    //TODO: val can only be smaller or equal with "browser.urlbar.maxRichResults"
-    XPCNativeWrapper.unwrap(this)._panel.p.maxResults = val;
-  },
-
-  getSelectionStart() {
-    return XPCNativeWrapper.unwrap(this)._panel.urlbar.selectionStart;
-  },
-
-  setSelectionStart(val) {
-    XPCNativeWrapper.unwrap(this)._panel.urlbar.selectionStart = val;
-  },
-
-  getSelectionEnd() {
-    return XPCNativeWrapper.unwrap(this)._panel.urlbar.selectionEnd;
-  },
-
-  setSelectionEnd(val) {
-    XPCNativeWrapper.unwrap(this)._panel.urlbar.selectionEnd = val;
-  },
-
-  setSelectionRange(start, end) {
-    XPCNativeWrapper.unwrap(this)._panel.urlbar.setSelectionRange(start, end);
-  },
-
-  enter() {
-    XPCNativeWrapper.unwrap(this)._panel.urlbar.handleCommand();
-  },
-
   focus() {
-    XPCNativeWrapper.unwrap(this)._panel.urlbar.focus();
+    this._urlbar.focus();
   },
 
   blur() {
-    XPCNativeWrapper.unwrap(this)._panel.urlbar.blur();
+    this._urlbar.blur();
   },
+
+  enter() {
+    this._urlbar.handleCommand();
+  },
+
+  get height() {
+    return this.browser.getBoundingClientRect().height;
+  },
+
+  set height(val) {
+    this.p.style.height = val + "px";
+    this.browser.style.height = val + "px";
+  },
+
+  get value() {
+    return this._urlbar.value;
+  },
+
+  set value(val) {
+    this._urlbar.value = val;
+  },
+
+  get selectionStart() {
+    return this._urlbar.selectionStart;
+  },
+
+  set selectionStart(val) {
+    this._urlbar.selectionStart = val;
+  },
+
+  get selectionEnd() {
+    return this._urlbar.selectionEnd;
+  },
+
+  set selectionEnd(val) {
+    this._urlbar.selectionEnd = val;
+  }
 };
