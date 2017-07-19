@@ -169,7 +169,7 @@ function CustomOmnibox(win, omniboxURL, owner) {
   this._popup = this.document.getElementById("PopupAutoCompleteRichResult");
   this._urlbar = win.gURLBar;
 
-  this.isOverrideSuccessful = this._popup.requestAutocompletePopupOverride(this, {
+  this.isOverrideSuccessful = this._popup.requestAutocompletePopupOverride({
     _invalidate: this._invalidate.bind(this)
   });
 
@@ -195,7 +195,7 @@ CustomOmnibox.prototype = {
     }
 
     this._owner = null;
-    this._popup.releaseAutocompletePopupOverride(this);
+    this._popup.releaseAutocompletePopupOverride();
     this._destroyBrowser(this._browser);
     this._urlbar.removeEventListener("keydown", this);
     this._urlbar.removeEventListener("input", this);

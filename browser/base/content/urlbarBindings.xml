@@ -2143,7 +2143,6 @@ file, You can obtain one at http://mozilla.org/MPL/2.0/.
         ]]></body>
       </method>
 
-      <field name="_addonOwner">null</field>
       <field name="_addonOverriddenFunctionsByName">{}</field>
 
       <!-- These methods must be overridden and properly handled by the API
@@ -2162,15 +2161,8 @@ file, You can obtain one at http://mozilla.org/MPL/2.0/.
       <field name="_addonHiddenDisplaysByAnonid">{}</field>
 
       <method name="requestAutocompletePopupOverride">
-        <parameter name="owner"/>
         <parameter name="overrides"/>
         <body><![CDATA[
-          if (this._addonOwner) {
-            // Another add-on has already requested the browser. Return null to
-            // signal to the calling add-on that it should not take over the
-            // popup.  First add-on wins for now.
-            return false;
-          }
           // Make sure all overrides are provided before doing anything.
           for (let name of this._addonOverrideFunctionNames) {
             if (typeof(overrides[name]) != "function") {
@@ -2192,7 +2184,6 @@ file, You can obtain one at http://mozilla.org/MPL/2.0/.
           }
 
           // OK, override methods
-          this._addonOwner = owner;
           this._addonOverriddenFunctionsByName = {};
           for (let name of this._addonOverrideFunctionNames) {
             this._addonOverriddenFunctionsByName[name] = this[name];
@@ -2203,12 +2194,7 @@ file, You can obtain one at http://mozilla.org/MPL/2.0/.
       </method>
 
       <method name="releaseAutocompletePopupOverride">
-        <parameter name="owner"/>
         <body><![CDATA[
-          if (this._addonOwner != owner) {
-            throw new Error("You're not the Browser owner");
-          }
-          this._addonOwner = null;
           for (let anonid of this._addonHiddenAnonids) {
             let child = document.getAnonymousElementByAttribute(
               this, "anonid", anonid
