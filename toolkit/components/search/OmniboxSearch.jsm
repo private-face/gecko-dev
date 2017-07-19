@@ -18,29 +18,54 @@ Cu.import("resource://gre/modules/ExtensionCommon.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "ExtensionParent",
                                   "resource://gre/modules/ExtensionParent.jsm");
 
-const {
-  promiseEvent,
-} = ExtensionUtils;
-
+const { promiseEvent } = ExtensionUtils;
 const { SingletonEventManager } = ExtensionCommon;
 
 const XUL_NS = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
-
-const BrowserWindows = new WeakMap();
+const DEFAULT_MAX_RESULTS = 20;
 
 class OmniboxSearchOverride extends EventEmitter {
-  constructor() {
+  constructor(ominboxURL, windowTracker) {
     super();
-    this.maxResults = 20;
+    this._overridesMap = new Map();
+    this._omniboxURL = ominboxURL;
+    this._windowTracker = windowTracker;
+    this.maxResults = DEFAULT_MAX_RESULTS;
+    this._init();
   }
 
-  register(url, windowTracker) {
-    this.windowTracker = windowTracker;
-    BrowserListener.init(url);
+  _init() {
+    this.onWindowOpened = this._onWindowOpened.bind(this);
+    this.onWindowClosed = this._onWindowClosed.bind(this);
+    this._windowTracker.addOpenListener(this.onWindowOpened);
+    this._windowTracker.addCloseListener(this.onWindowClosed);
+    for(let window of this._windowTracker.browserWindows()) {
+      this.onWindowOpened(window);
+    }
   }
 
-  reset() {
-    BrowserListener.destroy();
+  destroy() {
+    for(let [window, browser] of this._overridesMap.entries()) {
+      browser.destroy();
+    }
+    this._overridesMap.clear();
+    this._windowTracker.removeCloseListener(this.onWindowClosed);
+    this._windowTracker.removeOpenListener(this.onWindowOpened);
+  }
+
+  _onWindowOpened(window) {
+    const browser = new Browser(window, this._omniboxURL, this);
+    if (browser.isOverrideAllowed) {
+      this._overridesMap.set(window, browser);
+    }
+  }
+
+  _onWindowClosed(window) {
+    const browser = this._overridesMap.get(window);
+    if (browser) {
+      browser.destroy();
+      this._overridesMap.delete(window);
+    }
   }
 
   _getBrowser(id, context) {
@@ -54,12 +79,12 @@ class OmniboxSearchOverride extends EventEmitter {
         window = context.currentWindow;
       }
     } else {
-      window = this.windowTracker.getWindow(id, context);
+      window = this._windowTracker.getWindow(id, context);
     }
     if (!window) {
       return Promise.reject({ message: `Invalid window ID: ${id}` });
     }
-    const browser = BrowserWindows.get(window);
+    const browser = this._overridesMap.get(window);
     if (!browser) {
       return Promise.reject({ message: "No omnibox override exists for this window." });
     }
@@ -71,7 +96,7 @@ class OmniboxSearchOverride extends EventEmitter {
 
     return new SingletonEventManager(context, `omnibox.on${name}`, fire => {
       const listener = (eventName, window, details) => {
-        const id = this.windowTracker.getId(window);
+        const id = this._windowTracker.getId(window);
         if (context.viewType === "background" || context.windowId === id) {
           if (details) {
             details.windowId = id;
@@ -138,121 +163,76 @@ class OmniboxSearchOverride extends EventEmitter {
   }
 }
 
-const omniboxSearch = new OmniboxSearchOverride;
+this.OmniboxSearch = {
+  _activeOverride: null,
+  _overridesQueue: [],
 
-this.OmniboxSearch = omniboxSearch;
-
-this.BrowserListener = {
-  init(omniboxURL) {
-    if (this.browsers) {
+  _activateNext() {
+    if (this._overridesQueue.length === 0) {
+      this._activeOverride = null;
       return;
     }
-    this.omniboxURL = omniboxURL;
-    this.browsers = new Set();
-    // TODO see if we could make use of windowTracker events here
-    // see:   windowTracker.addOpenListener(this._handleWindowOpen);
-    //        windowTracker.addCloseListener(this._handleWindowClose);
-    // instead of doing everything ourselves 
-    this.registerOpenBrowserWindows();
-    Services.ww.registerNotification(this);
+
+    const {id, url, windowTracker} = this._overridesQueue.shift();
+    const override = new OmniboxSearchOverride(url, windowTracker);
+    this._activeOverride = { id, override };
   },
 
-  destroy() {
-    if (!this.browsers) {
-      return;
-    }
-    Services.ww.unregisterNotification(this);
-    for (let browser of this.browsers) {
-      browser.destroy();
-    }
-    this.browsers.clear();
-    delete this.browsers;
+  get hasActiveOverride() {
+    return Boolean(this._activeOverride);
   },
 
-  registerOpenBrowserWindows() {
-    let wins = Services.ww.getWindowEnumerator();
-    while (wins.hasMoreElements()) {
-      let win = wins.getNext().QueryInterface(Ci.nsIDOMWindow);
-      this.registerPossibleBrowserWindow(win);
-    }
-  },
-
-  registerPossibleBrowserWindow(win) {
-    promiseWindowLoaded(win).then(() => {
-      if (isValidBrowserWindow(win)) {
-        this.browsers.add(new Browser(win, this.omniboxURL));
-      }
+  register(id, url, windowTracker) {
+    this._overridesQueue.push({
+      id, url, windowTracker
     });
+    if (!this.hasActiveOverride) {
+      this._activateNext();
+    }
   },
 
-  observe(subj, topic, data) {
-    let win = subj.QueryInterface(Ci.nsIDOMWindow);
-    if (!win) {
-      return;
-    }
-    if (topic == "domwindowopened") {
-      this.registerPossibleBrowserWindow(win);
-    } else if (topic == "domwindowclosed") {
-      for (let browser of this.browsers) {
-        if (browser.window == win) {
-          browser.destroy();
-          this.browsers.delete(browser);
-          break;
-        }
+  unregister(id) {
+    if (this._activeOverride && this._activeOverride.id === id) {
+      this._activeOverride.override.destroy();
+      this._activateNext();
+    } else {
+      const index = this._overridesQueue.findIndex(o => o.id === id);
+      if (index !== -1) {
+        this._overridesQueue.splice(index, 1);
       }
     }
   },
+
+  getAPI(context) {
+    return this.hasActiveOverride ? 
+      this._activeOverride.override.getAPI(context) : {};
+  }
 };
 
-function isValidBrowserWindow(win) {
-  return !win.closed &&
-         win.toolbar.visible &&
-         win.document.documentElement.getAttribute("windowtype") ==
-           "navigator:browser";
-}
-
-function promiseWindowLoaded(win, callback) {
-  return new Promise(resolve => {
-    if (win.document.readyState == "complete") {
-      resolve();
-      return;
-    }
-    win.addEventListener("load", function onLoad(event) {
-      if (event.target == win.document) {
-        win.removeEventListener("load", onLoad, true);
-        win.setTimeout(resolve);
-      }
-    }, true);
-  });
-}
-
-function Browser(win, omniboxURL) {
-  if (BrowserWindows.has(win)) {
-    return BrowserWindows.get(win);
-  }
-  this.window = win;
-  this.tempPanel = this.document.getElementById("mainPopupSet");
-  this.p = this.document.getElementById("PopupAutoCompleteRichResult");
+function Browser(win, omniboxURL, owner) {
+  this._window = win;
+  this._tempPanel = this.document.getElementById("mainPopupSet");
+  this._popup = this.document.getElementById("PopupAutoCompleteRichResult");
   this._urlbar = win.gURLBar;
 
-  this.isOverrideAllowed = this.p.requestAutocompletePopupOverride(this, {
+  this.isOverrideAllowed = this._popup.requestAutocompletePopupOverride(this, {
     _invalidate: this._invalidate.bind(this)
   });
 
   if (this.isOverrideAllowed) {
-    this.browser = this._createBrowser(this.tempPanel, omniboxURL);
+    this._owner = owner;
+    this._browser = this._createBrowser(this._tempPanel, omniboxURL);
     this._urlbar.addEventListener("keydown", this);
     this._urlbar.addEventListener("input", this);
     this._urlbar.addEventListener("focus", this);
     this._urlbar.addEventListener("blur", this);  
-    this.p.addEventListener("popupshown", this);
-    BrowserWindows.set(this.window, this);
+    this._popup.addEventListener("popupshown", this);
   }
 }
 
 Browser.prototype = {
   get document() {
-    return this.window.document;
+    return this._window.document;
   },
 
   destroy() {
@@ -260,15 +240,15 @@ Browser.prototype = {
       return;
     }
 
-    this.p.releaseAutocompletePopupOverride(this);
-    this._destroyBrowser(this.browser);
+    this._owner = null;
+    this._popup.releaseAutocompletePopupOverride(this);
+    this._destroyBrowser(this._browser);
     this._urlbar.removeEventListener("keydown", this);
     this._urlbar.removeEventListener("input", this);
     this._urlbar.removeEventListener("focus", this);
     this._urlbar.removeEventListener("blur", this);
-    this.p.removeEventListener("popupshown", this);
-    BrowserWindows.delete(this.window, this);
-    this.p.style.height = "";
+    this._popup.removeEventListener("popupshown", this);
+    this._popup.style.height = "";
   },
 
   _createBrowser(viewNode, omniboxURL = null) {
@@ -322,11 +302,11 @@ Browser.prototype = {
   },
 
   _attach() {
-    const browser = this.browser;
-    const viewNode = this.document.getAnonymousElementByAttribute(this.p, 
+    const browser = this._browser;
+    const viewNode = this.document.getAnonymousElementByAttribute(this._popup, 
       "anonid", "popupoverride");
-    this.browser = this._createBrowser(viewNode);
-    this.browser.swapDocShells(browser);
+    this._browser = this._createBrowser(viewNode);
+    this._browser.swapDocShells(browser);
     this._destroyBrowser(browser);
   },
 
@@ -349,19 +329,19 @@ Browser.prototype = {
     switch(event.type) {
       case "popupshown":
         this._attach();
-        this.p.removeEventListener("popupshown", this);
+        this._popup.removeEventListener("popupshown", this);
         break;
       case "focus":
       case "blur":
-        omniboxSearch.emit(event.type, this.window);
+        this._owner.emit(event.type, this._window);
         break;
       case "input":
-        omniboxSearch.emit(event.type, this.window, {
+        this._owner.emit(event.type, this._window, {
           value: this.value
         });
         break;
       case "keydown":
-        omniboxSearch.emit(event.type, this.window, 
+        this._owner.emit(event.type, this._window, 
           this._getUrlbarEventDetails(event));  
         break;
     }
@@ -385,6 +365,8 @@ Browser.prototype = {
   updateOverrideDetails(details) {
     const modifiableProps = ["value", "selectionStart", "selectionEnd", "height"];
     for (let [prop, value] of Object.entries(details)) {
+      // TODO make sure json schema takes care of the arguments validation and 
+      // remove this check.
       if (modifiableProps.indexOf(prop) !== -1) {
         this[prop] = value;
       }
@@ -394,11 +376,11 @@ Browser.prototype = {
   // This is called by the popup directly.  It overrides the popup's own
   // _invalidate method.
   _invalidate() {
-    let controller = this.p.mInput.controller;
+    let controller = this._popup.mInput.controller;
 
     if(this._currentUrlbarValue !== controller.searchString){
       this._currentIndex = 0;
-      omniboxSearch.emit("reset", this.window);
+      this._owner.emit("reset", this._window);
       this._currentUrlbarValue = controller.searchString;
     }
     this._appendCurrentResult();
@@ -407,8 +389,8 @@ Browser.prototype = {
   // This emulates the popup's own _appendCurrentResult method, except instead
   // of appending results to the popup, it emits "result" events.
   _appendCurrentResult() {
-    const controller = this.p.mInput.controller;
-    const maxResults = Math.min(omniboxSearch.maxResults, this.p._matchCount);
+    const controller = this._popup.mInput.controller;
+    const maxResults = Math.min(this._owner.maxResults, this._popup._matchCount);
 
     const results = [];
     for(let index = 0; index < maxResults; index++) {
@@ -422,7 +404,7 @@ Browser.prototype = {
       });
     }
 
-    omniboxSearch.emit("results", this.window, {
+    this._owner.emit("results", this._window, {
       results,
       searchStatus: controller.searchStatus,
       query: controller.searchString.trim()
@@ -442,12 +424,12 @@ Browser.prototype = {
   },
 
   get height() {
-    return this.browser.getBoundingClientRect().height;
+    return this._browser.getBoundingClientRect().height;
   },
 
   set height(val) {
-    this.p.style.height = val + "px";
-    this.browser.style.height = val + "px";
+    this._popup.style.height = val + "px";
+    this._browser.style.height = val + "px";
   },
 
   get value() {
