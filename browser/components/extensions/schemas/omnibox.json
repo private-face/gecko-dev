@@ -134,12 +134,12 @@
         }
       },
       {
-        "id": "OmniboxOverride",
+        "id": "OmniboxOverrideDetails",
         "type": "object",
         "description": "An object containing details of overriden omnibox.",
         "properties": {
           "windowId": {
-            "type": "number",
+            "type": "integer",
             "optional": true
           },
           "value": {
@@ -254,7 +254,7 @@
           },
           {
             "name": "details",
-            "$ref": "OmniboxOverride"
+            "$ref": "OmniboxOverrideDetails"
           },
           {
             "type": "function",
@@ -424,7 +424,16 @@
         "type": "function",
         "parameters": [
           {
-            "$ref": "UrlbarEventDetails"
+            "name": "details",
+            "type": "object",
+            "properties": {
+              "windowId": {
+                "type": "number"
+              },
+              "value": {
+                "type": "string"
+              }
+            }
           }
         ]
       },
@@ -441,12 +450,32 @@
       {
         "name": "onFocus",
         "type": "function",
-        "parameters": []
+        "parameters": [
+          {
+            "name": "details",
+            "type": "object",
+            "properties": {
+              "windowId": {
+                "type": "number"
+              }
+            }
+          }
+        ]
       },
       {
         "name": "onBlur",
         "type": "function",
-        "parameters": []
+        "parameters": [
+          {
+            "name": "details",
+            "type": "object",
+            "properties": {
+              "windowId": {
+                "type": "number"
+              }
+            }
+          }
+        ]
       },
       {
         "name": "onReset",

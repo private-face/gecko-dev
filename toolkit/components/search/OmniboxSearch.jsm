@@ -95,15 +95,11 @@ class OmniboxOverride extends EventEmitter {
     const name = eventName[0].toUpperCase() + eventName.slice(1);
 
     return new SingletonEventManager(context, `omnibox.on${name}`, fire => {
-      const listener = (eventName, window, details) => {
+      const listener = (eventName, window, details = {}) => {
         const id = this._windowTracker.getId(window);
         if (context.viewType === "background" || context.windowId === id) {
-          if (details) {
-            details.windowId = id;
-            fire.async(details);
-          } else {
-            fire.async();
-          }
+          details.windowId = id;
+          fire.async(details);
         }
       };
       this.on(eventName, listener);
@@ -317,13 +313,8 @@ CustomOmnibox.prototype = {
   },
 
   updateOverrideDetails(details) {
-    const modifiableProps = ["value", "selectionStart", "selectionEnd", "height"];
     for (let [prop, value] of Object.entries(details)) {
-      // TODO make sure json schema takes care of the arguments validation and 
-      // remove this check.
-      if (modifiableProps.indexOf(prop) !== -1) {
-        this[prop] = value;
-      }
+      this[prop] = value;
     }
   },
 
