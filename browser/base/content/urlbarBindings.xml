@@ -2189,7 +2189,6 @@ file, You can obtain one at http://mozilla.org/MPL/2.0/.
             this._addonOverriddenFunctionsByName[name] = this[name];
             this[name] = overrides[name];
           }
-          return true;
         ]]></body>
       </method>
 

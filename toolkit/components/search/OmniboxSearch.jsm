@@ -55,9 +55,7 @@ class OmniboxOverride extends EventEmitter {
 
   _onWindowOpened(window) {
     const omnibox = new CustomOmnibox(window, this._omniboxURL, this);
-    if (omnibox.isOverrideSuccessful) {
-      this._overridesMap.set(window, omnibox);
-    }
+    this._overridesMap.set(window, omnibox);
   }
 
   _onWindowClosed(window) {
@@ -159,18 +157,27 @@ class OmniboxOverride extends EventEmitter {
   }
 }
 
-function CustomOmnibox(win, omniboxURL, owner) {
-  this._window = win;
-  this._tempPanel = this.document.getElementById("mainPopupSet");
-  this._popup = this.document.getElementById("PopupAutoCompleteRichResult");
-  this._urlbar = win.gURLBar;
-
-  this.isOverrideSuccessful = this._popup.requestAutocompletePopupOverride({
-    _invalidate: this._invalidate.bind(this)
-  });
-
-  if (this.isOverrideSuccessful) {
+class CustomOmnibox {
+  constructor(win, omniboxURL, owner) {
+    this._window = win;
+    this._tempPanel = this.document.getElementById("mainPopupSet");
+    this._popup = this.document.getElementById("PopupAutoCompleteRichResult");
+    this._urlbar = win.gURLBar;
     this._owner = owner;
+    this._init(omniboxURL);
+  }
+  get document() {
+    return this._window.document;
+  }
+
+  _init(omniboxURL) {
+    this._popup.requestAutocompletePopupOverride({
+      _invalidate: this._invalidate.bind(this)
+    });
+    // Original autocomplete popup is lazily initialized. In order for 
+    // override document to be accessible immediately from extension 
+    // create a temporary Browser element inside mainPopupSet.
+    // Later on it will be attached to a real popup.
     this._browser = this._createBrowser(this._tempPanel, omniboxURL);
     this._urlbar.addEventListener("keydown", this);
     this._urlbar.addEventListener("input", this);
@@ -178,18 +185,8 @@ function CustomOmnibox(win, omniboxURL, owner) {
     this._urlbar.addEventListener("blur", this);  
     this._popup.addEventListener("popupshown", this);
   }
-}
-
-CustomOmnibox.prototype = {
-  get document() {
-    return this._window.document;
-  },
 
   destroy() {
-    if (!this.isOverrideSuccessful) {
-      return;
-    }
-
     this._owner = null;
     this._popup.releaseAutocompletePopupOverride();
     this._destroyBrowser(this._browser);
@@ -199,7 +196,7 @@ CustomOmnibox.prototype = {
     this._urlbar.removeEventListener("blur", this);
     this._popup.removeEventListener("popupshown", this);
     this._popup.style.height = "";
-  },
+  }
 
   _createBrowser(viewNode, omniboxURL = null) {
     const browser = this.document.createElementNS(XUL_NS, "browser");
@@ -241,7 +238,7 @@ CustomOmnibox.prototype = {
     });
 
     return browser;
-  },
+  }
 
   _destroyBrowser(browser) {
     const mm = browser.messageManager;
@@ -249,7 +246,7 @@ CustomOmnibox.prototype = {
       mm.removeMessageListener("Extension:BrowserResized", this);
     }
     browser.remove();
-  },
+  }
 
   _attach() {
     const browser = this._browser;
@@ -258,7 +255,7 @@ CustomOmnibox.prototype = {
     this._browser = this._createBrowser(viewNode);
     this._browser.swapDocShells(browser);
     this._destroyBrowser(browser);
-  },
+  }
 
   _getUrlbarEventDetails(event) {
     let properties = [
@@ -273,7 +270,7 @@ CustomOmnibox.prototype = {
       memo[prop] = event[prop];
       return memo;
     }, {});
-  },
+  }
 
   handleEvent(event) {
     switch(event.type) {
@@ -295,13 +292,13 @@ CustomOmnibox.prototype = {
           this._getUrlbarEventDetails(event));  
         break;
     }
-  },
+  }
 
   receiveMessage({name, data}) {
     if (name === "Extension:BrowserResized") {
       this.height = data.height;
     }
-  },
+  }
 
   getOverrideDetails() {
     return {
@@ -310,13 +307,13 @@ CustomOmnibox.prototype = {
       selectionStart: this.selectionStart,
       selectionEnd: this.selectionEnd,
     };
-  },
+  }
 
   updateOverrideDetails(details) {
     for (let [prop, value] of Object.entries(details)) {
       this[prop] = value;
     }
-  },
+  }
 
   // This is called by the popup directly.  It overrides the popup's own
   // _invalidate method.
@@ -329,7 +326,7 @@ CustomOmnibox.prototype = {
       this._currentUrlbarValue = controller.searchString;
     }
     this._appendCurrentResult();
-  },
+  }
 
   // This emulates the popup's own _appendCurrentResult method, except instead
   // of appending results to the popup, it emits "result" events.
@@ -354,53 +351,53 @@ CustomOmnibox.prototype = {
       searchStatus: controller.searchStatus,
       query: controller.searchString.trim()
     });
-  },
+  }
 
   focus() {
     this._urlbar.focus();
-  },
+  }
 
   blur() {
     this._urlbar.blur();
-  },
+  }
 
   enter() {
     this._urlbar.handleCommand();
-  },
+  }
 
   get height() {
     return this._browser.getBoundingClientRect().height;
-  },
+  }
 
   set height(val) {
     this._popup.style.height = val + "px";
     this._browser.style.height = val + "px";
-  },
+  }
 
   get value() {
     return this._urlbar.value;
-  },
+  }
 
   set value(val) {
     this._urlbar.value = val;
-  },
+  }
 
   get selectionStart() {
     return this._urlbar.selectionStart;
-  },
+  }
 
   set selectionStart(val) {
     this._urlbar.selectionStart = val;
-  },
+  }
 
   get selectionEnd() {
     return this._urlbar.selectionEnd;
-  },
+  }
 
   set selectionEnd(val) {
     this._urlbar.selectionEnd = val;
   }
-};
+}
 
 
 this.OmniboxOverrideManager = {
