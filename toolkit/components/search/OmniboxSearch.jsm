@@ -7,6 +7,8 @@
 const Ci = Components.interfaces;
 const Cu = Components.utils;
 
+/* exported OmniboxOverrideManager */
+
 this.EXPORTED_SYMBOLS = [ "OmniboxOverrideManager" ];
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
@@ -24,6 +26,16 @@ const { SingletonEventManager } = ExtensionCommon;
 const XUL_NS = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
 const DEFAULT_MAX_RESULTS = 20;
 
+Components.utils.import("resource://gre/modules/Console.jsm");
+const console = new ConsoleAPI();
+
+/**
+ * Keeps track of opened/closed browser windows creating/destroying instances of
+ * CustomOmnibox for them. Exposes common API for manipulating override documents.
+ *
+ * Only one instance of OmniboxOverride is created per extension and only one 
+ * should be active at a time (OmniboxOverrideManager takes care of it).
+ */
 class OmniboxOverride extends EventEmitter {
   constructor(ominboxURL, windowTracker) {
     super();
@@ -66,6 +78,16 @@ class OmniboxOverride extends EventEmitter {
     }
   }
 
+  /**
+   * Returns an instance of CustomOmnibox for browser window with given ID/context.
+   * If window ID is null, context.currentWindow assumed. It throws if request
+   * was made from "background" context without spcifying window ID.
+   *
+   * @param {integer|null} id
+   * @param {BaseContext} context
+   * @return {Promise<CustomOmnibox>}
+   * @private
+   */
   _getOmnibox(id, context) {
     let window = null;
     if (id === null) {
@@ -89,6 +111,15 @@ class OmniboxOverride extends EventEmitter {
     return Promise.resolve(omnibox);
   }
 
+  /**
+   * Generates a SingletonEventManager for given eventName and context.
+   * Background scripts see events from every window, while other see only 
+   * form their context.
+   * 
+   * @param  {string} eventName
+   * @param  {BaseContext} context
+   * @return {function}
+   */
   _generateEventManager(eventName, context) {
     const name = eventName[0].toUpperCase() + eventName.slice(1);
 
@@ -107,6 +138,13 @@ class OmniboxOverride extends EventEmitter {
     }).api();
   }
 
+  /**
+   * Provides API for manipulating omniboxes. 
+   * If methods are called from non-background context window ID can be omitted.
+   *
+   * @param {BaseContext} context
+   * @return {object} API
+   */
   getAPI(context) {
     return {
       get: (opt_windowId) => {
@@ -157,6 +195,14 @@ class OmniboxOverride extends EventEmitter {
   }
 }
 
+/**
+ * Handles overriding the omnibox for given browser window by injecting a Browser element 
+ * into the original autocomplete popup and redefining urlbar-rich-result-popup's 
+ * "_invalidate" method.
+ *
+ * One instance of CustomOmnibox is created per each browser window.
+ * All events are emitted to the parent OmniboxOverride object and handled there.
+ */
 class CustomOmnibox {
   constructor(win, omniboxURL, owner) {
     this._window = win;
@@ -205,10 +251,11 @@ class CustomOmnibox {
     browser.setAttribute("transparent", "true");
     browser.setAttribute("class", "webextension-omnibox-browser");
     browser.setAttribute("webextension-view-type", "popup");
-    browser.setAttribute("tooltip", "aHTMLTooltip");
-    browser.setAttribute("contextmenu", "contentAreaContextMenu");
-    browser.setAttribute("autocompletepopup", "PopupAutoComplete");
     browser.setAttribute("flex", "1");
+
+    browser.addEventListener("focus", (e) => {
+      console.log('focus:', e);
+    });
 
     const readyPromise = promiseEvent(browser, "load");
     viewNode.appendChild(browser);
@@ -248,6 +295,12 @@ class CustomOmnibox {
     browser.remove();
   }
 
+  /**
+   * Inject a Browser holding omnibox override document into an autocomplete popup
+   * by creating another Browser element inside popup and swapping documents between them.
+   *
+   * @private
+   */
   _attach() {
     const browser = this._browser;
     const viewNode = this.document.getAnonymousElementByAttribute(this._popup, 
@@ -275,6 +328,7 @@ class CustomOmnibox {
   handleEvent(event) {
     switch(event.type) {
       case "popupshown":
+        // Since popup is shown we can safely attach browser to it.
         this._attach();
         this._popup.removeEventListener("popupshown", this);
         break;
@@ -300,6 +354,14 @@ class CustomOmnibox {
     }
   }
 
+  /**
+   * Returns all current override parameters.
+   * 
+   * @return {integer}  details.height Popup height
+   * @return {string}   details.value Urlbar text
+   * @return {integer}  details.selectionStart
+   * @return {integer}  details.selectionEnd
+   */
   getOverrideDetails() {
     return {
       height: this.height,
@@ -309,14 +371,29 @@ class CustomOmnibox {
     };
   }
 
+  /**
+   * Single method for updating any parameter of the overriden popup. 
+   * 
+   * @param  {object}   details
+   * @param  {integer}  details.height Popup height
+   * @param  {string}   details.value Urlbar text
+   * @param  {integer}  details.selectionStart
+   * @param  {integer}  details.selectionEnd
+   */
   updateOverrideDetails(details) {
     for (let [prop, value] of Object.entries(details)) {
+      // Input has already been validated through JSON schema, so no need to 
+      // do it again.
       this[prop] = value;
     }
   }
 
-  // This is called by the popup directly.  It overrides the popup's own
-  // _invalidate method.
+  /**
+   * Overriden popup's own "_invalidate" method. Is called from the popup
+   * directly.
+   * 
+   * @private
+   */
   _invalidate() {
     let controller = this._popup.mInput.controller;
 
@@ -328,8 +405,13 @@ class CustomOmnibox {
     this._appendCurrentResult();
   }
 
-  // This emulates the popup's own _appendCurrentResult method, except instead
-  // of appending results to the popup, it emits "result" events.
+  /**
+   * This emulates the popup's own _appendCurrentResult method, except instead
+   * of appending results to the popup, it emits "result" events to the parent 
+   * OmniboxOverride object.
+   *
+   * @private
+   */
   _appendCurrentResult() {
     const controller = this._popup.mInput.controller;
     const maxResults = Math.min(this._owner.maxResults, this._popup._matchCount);
@@ -400,6 +482,11 @@ class CustomOmnibox {
 }
 
 
+/**
+ * Handles keeping track of all extensions attempting to take over the omnibox,
+ * making sure that only one override is working at a time.
+ * Returns API for currently active OmniboxOverride.
+ */
 this.OmniboxOverrideManager = {
   _activeOverride: null,
   _overridesQueue: [],
@@ -419,6 +506,14 @@ this.OmniboxOverrideManager = {
     return Boolean(this._activeOverride);
   },
 
+  /**
+   * Registers an extension wanting to override the omnibox. 
+   * If this is the only candidate it immediately activates, otherwise 
+   * it is put into queue.
+   * @param  {string} id Extension ID
+   * @param  {string} url
+   * @param  {[type]} windowTracker
+   */
   register(id, url, windowTracker) {
     this._overridesQueue.push({
       id, url, windowTracker
@@ -428,6 +523,11 @@ this.OmniboxOverrideManager = {
     }
   },
 
+  /**
+   * Unregisters an extension with given ID. Either by removing it from waiting 
+   * queue or by destroying the corresponding override object.
+   * @param  {string} id Extension ID
+   */
   unregister(id) {
     if (this._activeOverride && this._activeOverride.id === id) {
       this._activeOverride.override.destroy();
@@ -440,6 +540,11 @@ this.OmniboxOverrideManager = {
     }
   },
 
+  /**
+   * Returns API for currently active omnibox override for given context.
+   * @param  {BaseContext} context
+   * @return {object} API
+   */
   getAPI(context) {
     return this.hasActiveOverride ? 
       this._activeOverride.override.getAPI(context) : {};
