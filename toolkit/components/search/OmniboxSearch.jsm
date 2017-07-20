@@ -252,6 +252,7 @@ class CustomOmnibox {
     browser.setAttribute("class", "webextension-omnibox-browser");
     browser.setAttribute("webextension-view-type", "popup");
     browser.setAttribute("flex", "1");
+    browser.style.MozUserFocus = "ignore";
 
     browser.addEventListener("focus", (e) => {
       console.log('focus:', e);
