@@ -1606,7 +1606,7 @@ file, You can obtain one at http://mozilla.org/MPL/2.0/.
       </xul:deck>
       <xul:richlistbox anonid="richlistbox" class="autocomplete-richlistbox"
                        flex="1"/>
-      <xul:hbox anonid="popupoverride">
+      <xul:hbox anonid="popupoverride" flex="1">
       </xul:hbox>
       <xul:hbox anonid="footer">
         <children/>

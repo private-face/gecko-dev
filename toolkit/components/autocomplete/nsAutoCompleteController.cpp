@@ -1683,6 +1683,8 @@ nsAutoCompleteController::ProcessResult(int32_t aSearchIndex, nsIAutoCompleteRes
     }
   }
 
+  // If search is complete update status before invalidation 
+  // so the popup can react to it.
   if (searchResult != nsIAutoCompleteResult::RESULT_SUCCESS_ONGOING &&
     searchResult != nsIAutoCompleteResult::RESULT_NOMATCH_ONGOING) {
     if (mRowCount)

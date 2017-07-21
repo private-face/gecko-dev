@@ -251,12 +251,9 @@ class CustomOmnibox {
     browser.setAttribute("transparent", "true");
     browser.setAttribute("class", "webextension-omnibox-browser");
     browser.setAttribute("webextension-view-type", "popup");
+    browser.setAttribute("contextmenu", "contentAreaContextMenu");
     browser.setAttribute("flex", "1");
     browser.style.MozUserFocus = "ignore";
-
-    browser.addEventListener("focus", (e) => {
-      console.log('focus:', e);
-    });
 
     const readyPromise = promiseEvent(browser, "load");
     viewNode.appendChild(browser);
